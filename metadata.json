@@ -1,0 +1,7 @@
+{
+  "name": "Quantum Oracles",
+  "description": "Un'esperienza spirituale WebGL in cui le particelle atomiche si trasformano per rispondere ai tuoi pensieri sul passato e sul futuro.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
