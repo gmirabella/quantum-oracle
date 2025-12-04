@@ -42,71 +42,52 @@ export const detectHand = (video: HTMLVideoElement): HandData => {
   if (detections.landmarks && detections.landmarks.length > 0) {
     const landmarks = detections.landmarks[0];
     
-    // Landmark 9 (Middle Finger MCP - Knuckle) is a good stable center point for the hand position
+    // Landmark 9 (Middle Finger MCP) is the most stable center of the palm
     const handCenter = landmarks[9]; 
-    result.x = 1 - handCenter.x; // Mirror horizontally
+    result.x = 1 - handCenter.x; // Mirroring X for intuitive interaction
     result.y = handCenter.y;
     result.isDetected = true;
 
-    // --- GESTURE RECOGNITION LOGIC ---
-    
-    // Helper: Distance squared between two landmarks
-    const distSq = (p1: any, p2: any) => Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2) + Math.pow(p1.z - p2.z, 2);
-    
+    // --- SIMPLIFIED ROBUST ALGORITHM ---
+    // We use the distance between Wrist(0) and MiddleMCP(9) as a reference "Unit Scale".
+    // Closed fingers (Fist) will have tips closer to the wrist (approx 1 Unit).
+    // Open fingers will have tips far from wrist (approx 1.8 - 2.0 Units).
+
+    const dSq = (p1: any, p2: any) => Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2); // 2D is enough and more stable
+    const dist = (p1: any, p2: any) => Math.sqrt(dSq(p1, p2));
+
     const wrist = landmarks[0];
+    const middleMCP = landmarks[9];
     
-    // Tips
-    const indexTip = landmarks[8];
-    const middleTip = landmarks[12];
-    const ringTip = landmarks[16];
-    const pinkyTip = landmarks[20];
+    // The "Size" of the palm
+    const palmSize = dist(wrist, middleMCP); 
     
-    // Knuckles (MCP)
-    const indexMcp = landmarks[5];
-    const middleMcp = landmarks[9];
-    const ringMcp = landmarks[13];
-    const pinkyMcp = landmarks[17];
+    // Threshold: If tip is within 1.4x the palm size, it's curled.
+    // If it's further, it's extended.
+    const CLOSED_THRESHOLD = palmSize * 1.4; 
 
-    // Calculate distances from wrist to tips vs wrist to knuckles
-    // This provides scale-invariance (works regardless of distance from camera)
-    
-    let curledCount = 0;
-    const fingers = [
-      { tip: indexTip, mcp: indexMcp },
-      { tip: middleTip, mcp: middleMcp },
-      { tip: ringTip, mcp: ringMcp },
-      { tip: pinkyTip, mcp: pinkyMcp }
-    ];
+    // Finger Tips indices: Index(8), Middle(12), Ring(16), Pinky(20)
+    const tips = [8, 12, 16, 20];
+    let closedFingers = 0;
 
-    for (const f of fingers) {
-      const tipDist = distSq(f.tip, wrist);
-      const mcpDist = distSq(f.mcp, wrist);
-      
-      // If tip is closer to wrist than some factor of the knuckle distance, it's curled
-      // Or simply: tip is very close to mcp
-      const tipToMcp = distSq(f.tip, f.mcp);
-      
-      // Heuristic: A curled finger tip is physically closer to the wrist/palm area
-      if (tipDist < mcpDist * 1.2 || tipToMcp < mcpDist * 0.5) {
-        curledCount++;
+    for (const tipIdx of tips) {
+      const tipDistance = dist(wrist, landmarks[tipIdx]);
+      if (tipDistance < CLOSED_THRESHOLD) {
+        closedFingers++;
       }
     }
 
-    const thumbTip = landmarks[4];
-    const thumbIp = landmarks[3];
-    const isThumbCurled = distSq(thumbTip, pinkyMcp) < distSq(thumbIp, pinkyMcp); // Thumb folded across palm
-
     // Classification
-    if (curledCount >= 3) {
-      // If most fingers are curled, it's a fist or charging state
+    // 4 Fingers closed = FIST (Thumb is unreliable, ignored)
+    if (closedFingers >= 3) {
       result.gesture = 'CLOSED_FIST';
-    } else if (curledCount === 0) {
+    } 
+    // 0 or 1 Fingers closed = OPEN
+    else if (closedFingers <= 1) {
       result.gesture = 'OPEN_HAND';
-    } else if (curledCount === 3 && !isThumbCurled) { 
-        // Only index extended? (Rough check, refined from previous logic)
-        result.gesture = 'POINTING';
-    } else {
-        result.gesture = 'UNKNOWN';
+    } 
+    else {
+      result.gesture = 'UNKNOWN';
     }
   }
 

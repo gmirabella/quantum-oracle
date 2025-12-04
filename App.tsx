@@ -24,63 +24,79 @@ const App: React.FC = () => {
   const [handData, setHandData] = useState<HandData | undefined>(undefined);
   const requestRef = useRef<number>(0);
 
-  useEffect(() => {
-    // Clean up webcam when unmounting or switching modes if needed
-    return () => {
+  // Function to completely stop camera and vision loop
+  const stopCamera = () => {
+    if (requestRef.current) {
       cancelAnimationFrame(requestRef.current);
-      if (videoRef.current && videoRef.current.srcObject) {
-         const stream = videoRef.current.srcObject as MediaStream;
-         stream.getTracks().forEach(t => t.stop());
-      }
-    };
-  }, []);
-
-  // Handle Mode Switching to Evoca (Webcam activation)
-  useEffect(() => {
-    if (mode === TimeMode.EVOCA) {
-      startCamera();
-    } else {
-      // Stop camera if leaving vision modes
-       if (videoRef.current && videoRef.current.srcObject) {
-         const stream = videoRef.current.srcObject as MediaStream;
-         stream.getTracks().forEach(t => t.stop());
-         setCameraStatus(null);
-      }
+      requestRef.current = 0;
     }
-  }, [mode]);
-
-  const startCamera = async () => {
-    if (cameraStatus === 'active') return; // Already running
-
-    setCameraStatus('loading');
-    try {
-      await initializeVision();
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-          width: 640, 
-          height: 480,
-          facingMode: 'user'
-        } 
-      });
-      videoRef.current.srcObject = stream;
-      videoRef.current.play();
-      videoRef.current.onloadeddata = () => {
-        setCameraStatus('active');
-        loopVision();
-      };
-    } catch (e) {
-      console.error("Camera failed", e);
-      setCameraStatus('error');
+    if (videoRef.current && videoRef.current.srcObject) {
+       const stream = videoRef.current.srcObject as MediaStream;
+       stream.getTracks().forEach(t => t.stop());
+       videoRef.current.srcObject = null;
     }
+    setCameraStatus(null);
+    setHandData(undefined);
   };
 
   const loopVision = () => {
-    if (mode === TimeMode.EVOCA && videoRef.current.readyState === 4) {
+    if (videoRef.current && videoRef.current.readyState === 4) {
       const data = detectHand(videoRef.current);
       setHandData(data);
     }
     requestRef.current = requestAnimationFrame(loopVision);
   };
+
+  // Handle Mode Switching and Camera Lifecycle
+  useEffect(() => {
+    let isMounted = true;
+
+    if (mode === TimeMode.EVOCA) {
+      const startCamera = async () => {
+        setCameraStatus('loading');
+        try {
+          await initializeVision();
+          if (!isMounted) return;
+
+          const stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { 
+              width: 640, 
+              height: 480,
+              facingMode: 'user'
+            } 
+          });
+
+          if (!isMounted) {
+            stream.getTracks().forEach(t => t.stop());
+            return;
+          }
+          
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            videoRef.current.play();
+            videoRef.current.onloadeddata = () => {
+              if (isMounted) {
+                setCameraStatus('active');
+                loopVision();
+              }
+            };
+          }
+        } catch (e) {
+          console.error("Camera failed", e);
+          if (isMounted) setCameraStatus('error');
+        }
+      };
+
+      startCamera();
+    } else {
+      stopCamera();
+    }
+
+    return () => {
+      isMounted = false;
+      stopCamera();
+    };
+  }, [mode]);
 
   const handleSubmit = async () => {
     if (!inputText.trim()) return;

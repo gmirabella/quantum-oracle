@@ -106,7 +106,7 @@ export const UI: React.FC<UIProps> = ({
            
            {cameraStatus === 'active' && (
              <div className="flex flex-col gap-8 opacity-80 text-purple-200">
-                <div className="flex items-center justify-center gap-4 animate-pulse">
+                <div className="flex items-center justify-center gap-4">
                   <div className="p-2 border border-purple-500 rounded-full">
                     <div className="w-4 h-4 bg-purple-500 rounded-full"></div>
                   </div>

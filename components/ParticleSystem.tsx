@@ -1,5 +1,5 @@
 
-import React, { useRef, useMemo, useEffect } from 'react';
+import React, { useRef, useMemo, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { ShapeType, TimeMode } from '../types';
@@ -32,7 +32,7 @@ const getGlowTexture = () => {
   return texture;
 };
 
-// --- Helper Functions per le coordinate (come prima) ---
+// --- Helper Functions per le coordinate ---
 const getShapeCoordinates = (type: ShapeType, count: number): Float32Array => {
   const positions = new Float32Array(count * 3);
   for (let i = 0; i < count; i++) {
@@ -40,6 +40,7 @@ const getShapeCoordinates = (type: ShapeType, count: number): Float32Array => {
     let x = 0, y = 0, z = 0;
 
     if (type === ShapeType.RANDOM) {
+       // Random cloud (Universe)
        const theta = Math.random() * Math.PI * 2;
        const phi = Math.acos((Math.random() * 2) - 1);
        const r = Math.pow(Math.random(), 1/3) * SPACE_SIZE; 
@@ -118,13 +119,18 @@ const getShapeCoordinates = (type: ShapeType, count: number): Float32Array => {
 
 export const ParticleSystem: React.FC<ParticleSystemProps> = ({ mode, targetShape, handData }) => {
   const pointsRef = useRef<THREE.Points>(null);
-  const { clock, camera, viewport } = useThree();
+  const { clock, viewport } = useThree();
   
   // Physics buffers
   const velocities = useRef(new Float32Array(COUNT * 3));
   
-  // State for EVOCA logic
-  const prevGestureRef = useRef<'OPEN_HAND' | 'POINTING' | 'CLOSED_FIST' | 'UNKNOWN'>('UNKNOWN');
+  // State for EVOCA logic (Charging System)
+  const chargingRef = useRef<number>(0); // 0.0 to 1.0
+  const isExplodingRef = useRef<boolean>(false);
+  
+  // Visual state for the "Growing Fist" sphere
+  const [fistScale, setFistScale] = useState(0);
+  const [handPos, setHandPos] = useState<[number, number, number]>([0,0,0]);
   
   const glowTexture = useMemo(() => getGlowTexture(), []);
 
@@ -133,7 +139,7 @@ export const ParticleSystem: React.FC<ParticleSystemProps> = ({ mode, targetShap
     return getShapeCoordinates(targetShape, COUNT);
   }, [targetShape]);
 
-  // Initial Geometry
+  // Initial Geometry (Universe Cloud)
   const initialPositions = useMemo(() => getShapeCoordinates(ShapeType.RANDOM, COUNT), []);
   
   const positionsAttribute = useMemo(() => new THREE.BufferAttribute(new Float32Array(initialPositions), 3), [initialPositions]);
@@ -157,16 +163,38 @@ export const ParticleSystem: React.FC<ParticleSystemProps> = ({ mode, targetShap
         handX = (handData.x - 0.5) * viewport.width;
         handY = -(handData.y - 0.5) * viewport.height;
         handZ = 0; 
+        setHandPos([handX, handY, handZ]);
     }
 
-    // --- LOGICA EVOCA: CHECK EXPLOSION TRIGGER ---
-    let isExploding = false;
-    if (mode === TimeMode.EVOCA && handData?.isDetected) {
-        if (prevGestureRef.current === 'CLOSED_FIST' && handData.gesture === 'OPEN_HAND') {
-            isExploding = true;
+    // --- LOGICA EVOCA: CHARGING SYSTEM ---
+    if (mode === TimeMode.EVOCA) {
+        // Charging Logic (Independent of particles loop)
+        if (handData?.isDetected) {
+            if (handData.gesture === 'CLOSED_FIST') {
+                // Charge up faster!
+                chargingRef.current = Math.min(chargingRef.current + 0.08, 1.0); 
+                isExplodingRef.current = false;
+            } else if (handData.gesture === 'OPEN_HAND') {
+                // Trigger explosion if charged
+                if (chargingRef.current > 0.15) {
+                    isExplodingRef.current = true;
+                    chargingRef.current = 0; 
+                } else {
+                     chargingRef.current = Math.max(chargingRef.current - 0.1, 0);
+                }
+            } else {
+                chargingRef.current = Math.max(chargingRef.current - 0.05, 0);
+            }
+        } else {
+             chargingRef.current = 0;
         }
+        
+        // Update Fist Visual Scale
+        setFistScale(chargingRef.current);
     }
-    prevGestureRef.current = handData?.gesture || 'UNKNOWN';
+
+    const currentCharge = chargingRef.current;
+    const exploding = isExplodingRef.current;
 
     for (let i = 0; i < COUNT; i++) {
       const i3 = i * 3;
@@ -182,46 +210,57 @@ export const ParticleSystem: React.FC<ParticleSystemProps> = ({ mode, targetShap
         let vy = velocities.current[i3+1];
         let vz = velocities.current[i3+2];
 
-        if (handData?.isDetected && handData.gesture === 'CLOSED_FIST') {
-            // --- FASE DI CARICAMENTO (ACCUMULO) ---
+        if (currentCharge > 0.01) {
+            // --- FASE DI CARICAMENTO (FIREBALL EFFECT) ---
+            
             const dx = handX - px;
             const dy = handY - py;
             const dz = handZ - pz;
+            let dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+            if (dist < 0.001) dist = 0.001;
+
+            // Stronger Pull for snappier feel
+            const pullForce = 0.06 * currentCharge; 
             
-            // Strong attraction to center
-            const force = 0.08; 
-            vx += dx * force;
-            vy += dy * force;
-            vz += dz * force;
+            vx += dx * pullForce;
+            vy += dy * pullForce;
+            vz += dz * pullForce;
 
-            // Strong damping to hold them in a tight ball
-            vx *= 0.6;
-            vy *= 0.6;
-            vz *= 0.6;
+            // Fireball Chaos: Add random turbulence
+            // This simulates the "burning" and vibrating nature of a fireball
+            const chaos = 0.05 * currentCharge;
+            vx += (Math.random() - 0.5) * chaos;
+            vy += (Math.random() - 0.5) * chaos;
+            vz += (Math.random() - 0.5) * chaos;
 
-            // Jitter (Energy vibration)
-            vx += (Math.random() - 0.5) * 0.2;
-            vy += (Math.random() - 0.5) * 0.2;
-            vz += (Math.random() - 0.5) * 0.2;
+            // Core Repulsion: Tighter core (smaller radius) for density
+            if (dist < 1.0) {
+               const pushForce = 0.1 * currentCharge; 
+               vx -= dx * pushForce;
+               vy -= dy * pushForce;
+               vz -= dz * pushForce;
+            }
 
-            // Color Shift -> Magma/Purple
-            colorsArr[i3] = 1.0;     // Red
-            colorsArr[i3+1] = 0.2;   // Green
-            colorsArr[i3+2] = 0.8;   // Blue (Purple hue)
+            // Damping (Friction)
+            vx *= 0.88;
+            vy *= 0.88;
+            vz *= 0.88;
 
-        } else if (isExploding) {
-            // --- FASE ESPLOSIONE (TRIGGER UNICO) ---
-            const dx = px - handX;
-            const dy = py - handY;
-            const dz = pz - handZ;
+            // Colors: Purple/Red charging
+            colorsArr[i3] = 0.5 + currentCharge * 0.5; 
+            colorsArr[i3+1] = 0.5 - currentCharge * 0.3; 
+            colorsArr[i3+2] = 0.8 + currentCharge * 0.2;
+
+        } else if (exploding) {
+            // --- FASE ESPLOSIONE (SOFT RANDOM SCATTER) ---
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos((Math.random() * 2) - 1);
             
-            // Normalizza e spara via
-            const len = Math.sqrt(dx*dx + dy*dy + dz*dz) + 0.001;
-            const blastForce = 3.0 + Math.random() * 2.0;
+            const speed = 1.0 + Math.random() * 2.5; // Soft explosion speed
             
-            vx = (dx / len) * blastForce;
-            vy = (dy / len) * blastForce;
-            vz = (dz / len) * blastForce;
+            vx = speed * Math.sin(phi) * Math.cos(theta);
+            vy = speed * Math.sin(phi) * Math.sin(theta);
+            vz = speed * Math.cos(phi);
 
             // Flash White
             colorsArr[i3] = 1.0;
@@ -229,20 +268,36 @@ export const ParticleSystem: React.FC<ParticleSystemProps> = ({ mode, targetShap
             colorsArr[i3+2] = 1.0;
 
         } else {
-            // --- FASE IDLE / RILASCIO DOPO ESPLOSIONE ---
-            // Drag naturale
+            // --- FASE IDLE (LIVING UNIVERSE) ---
+            // Movimento randomico soft ("Flow Field")
+            
+            // 1. Weak Tether to Initial Position (so they don't wander off screen)
+            const tx = initialPositions[i3];
+            const ty = initialPositions[i3+1];
+            const tz = initialPositions[i3+2];
+            
+            vx += (tx - px) * 0.0005; 
+            vy += (ty - py) * 0.0005; 
+            vz += (tz - pz) * 0.0005; 
+
+            // 2. Sine Wave Flow (The "Random" organic movement)
+            // Different phase for each particle based on position
+            const noiseScale = 0.2;
+            const timeScale = time * 0.3;
+            
+            vx += Math.sin(py * noiseScale + timeScale) * 0.003;
+            vy += Math.cos(pz * noiseScale + timeScale) * 0.003;
+            vz += Math.sin(px * noiseScale + timeScale) * 0.003;
+            
+            // 3. High Damping for underwater feel
             vx *= 0.96;
             vy *= 0.96;
             vz *= 0.96;
 
-            // Return to neutral color
-            colorsArr[i3] += (0.8 - colorsArr[i3]) * 0.05;
-            colorsArr[i3+1] += (0.8 - colorsArr[i3+1]) * 0.05;
-            colorsArr[i3+2] += (0.8 - colorsArr[i3+2]) * 0.05;
-
-            // Gentle drift
-            vx += Math.sin(time * 0.5 + i) * 0.002;
-            vy += Math.cos(time * 0.3 + i * 0.1) * 0.002;
+            // 4. Restore original color slowly
+            colorsArr[i3] += (0.8 - colorsArr[i3]) * 0.02;
+            colorsArr[i3+1] += (0.8 - colorsArr[i3+1]) * 0.02;
+            colorsArr[i3+2] += (0.8 - colorsArr[i3+2]) * 0.02;
         }
 
         px += vx;
@@ -276,6 +331,9 @@ export const ParticleSystem: React.FC<ParticleSystemProps> = ({ mode, targetShap
         colorsArr[i3+2] = 0.8;
       }
     }
+    
+    // Stop explosion trigger after one frame
+    if (isExplodingRef.current) isExplodingRef.current = false;
 
     pointsRef.current.geometry.attributes.position.needsUpdate = true;
     pointsRef.current.geometry.attributes.color.needsUpdate = true;
@@ -287,21 +345,38 @@ export const ParticleSystem: React.FC<ParticleSystemProps> = ({ mode, targetShap
   });
 
   return (
-    <points ref={pointsRef}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" {...positionsAttribute} />
-        <bufferAttribute attach="attributes-color" {...colorsAttribute} />
-      </bufferGeometry>
-      <pointsMaterial
-        size={mode === TimeMode.EVOCA ? 0.28 : 0.25} 
-        map={glowTexture}
-        vertexColors={true}
-        sizeAttenuation={true}
-        transparent={true}
-        opacity={0.9}
-        blending={THREE.AdditiveBlending}
-        depthWrite={false}
-      />
-    </points>
+    <>
+      {/* PARTICLES */}
+      <points ref={pointsRef}>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" {...positionsAttribute} />
+          <bufferAttribute attach="attributes-color" {...colorsAttribute} />
+        </bufferGeometry>
+        <pointsMaterial
+          size={mode === TimeMode.EVOCA ? 0.28 : 0.25} 
+          map={glowTexture}
+          vertexColors={true}
+          sizeAttenuation={true}
+          transparent={true}
+          opacity={0.9}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </points>
+
+      {/* ENERGY CORE (GROWING FIST) - Solo in EVOCA e se mano rilevata */}
+      {mode === TimeMode.EVOCA && handData?.isDetected && (
+          <mesh position={handPos} scale={0.2 + fistScale * 2.5}>
+             <sphereGeometry args={[1, 32, 32]} />
+             <meshBasicMaterial 
+               color={new THREE.Color().setHSL(0.8 - fistScale * 0.2, 1, 0.5)} // Purple to Reddish
+               transparent 
+               opacity={0.1 + fistScale * 0.2} 
+               blending={THREE.AdditiveBlending}
+               depthWrite={false}
+             />
+          </mesh>
+      )}
+    </>
   );
 };
